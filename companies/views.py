@@ -4,6 +4,8 @@ import json
 
 # Create your views here.
 import random
+from rest_framework.permissions import AllowAny
+
 from datetime import datetime, timedelta
 from django.utils import timezone
 from django.conf import settings
@@ -15,7 +17,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.contrib.auth import authenticate, logout
-from .models import Company, Employee, CompanySettings, Warehouse, EmployeeLoginHistory
+from .models import Company, Employee, CompanySettings, PasswordResetToken, Warehouse, EmployeeLoginHistory
 from .serializers import (
     CompanyRegistrationSerializer,
     CompanyLoginSerializer,
@@ -190,6 +192,50 @@ class CompanyLogoutView(APIView):
                 'success': False,
                 'error': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
+
+class CompanyDashboardView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request):
+        company = request.user
+        employees = company.employees.all()
+        
+        # Calculate statistics
+        total_employees = employees.count()
+        active_employees = employees.filter(is_active=True, status='active').count()
+        inactive_employees = employees.filter(is_active=False).count()
+        suspended_employees = employees.filter(status='suspended').count()
+        on_leave_employees = employees.filter(status='on_leave').count()
+        
+        # Recent employees
+        recent_employees = employees.order_by('-created_at')[:5]
+        recent_employees_data = EmployeeSerializer(recent_employees, many=True).data
+        
+        # Company info
+        company_info = {
+            'company_id': company.company_id,
+            'company_name': company.company_name,
+            'email': company.email,
+            'mobile': company.mobile,
+            'gst_number': company.gst_number,
+            'is_verified': company.is_verified,
+            'created_at': company.created_at
+        }
+        
+        return Response({
+            'success': True,
+            'dashboard': {
+                'stats': {
+                    'total_employees': total_employees,
+                    'active_employees': active_employees,
+                    'inactive_employees': inactive_employees,
+                    'suspended_employees': suspended_employees,
+                    'on_leave_employees': on_leave_employees
+                },
+                'company_info': company_info,
+                'recent_employees': recent_employees_data
+            }
+        })
 
 class CompanyDashboardView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -423,6 +469,7 @@ class CheckCompanyExistsView(APIView):
             response['gst_exists'] = Company.objects.filter(gst_number=gst_number).exists()
         
         return Response(response)
+    
     
 
 #warehouse views 
@@ -938,6 +985,434 @@ class EmployeeDashboardView(APIView):
                 'success': False,
                 'error': 'Employee not found'
             }, status=status.HTTP_404_NOT_FOUND)
+        
+# Simplified version for both company and employee
+from datetime import timedelta
+
+class ForgotPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+    
+    def post(self, request):
+        email = request.data.get('email')
+        
+        if not email:
+            return Response({
+                'success': False,
+                'error': 'Email is required'
+            }, status=400)
+        
+        # Check in company
+        company = Company.objects.filter(email=email).first()
+        
+        # If not company, check in employees
+        if not company:
+            employee = Employee.objects.filter(email=email, is_active=True).first()
+            if employee:
+                company = employee.company
+        
+        if not company:
+            return Response({
+                'success': False,
+                'error': 'No account found with this email'
+            }, status=404)
+        
+        # ✅ OTP GENERATE करें (नया code)
+        otp = str(random.randint(100000, 999999))
+        
+        # OTP को database में save करें (temporary)
+        # ये आपके model पर depend करेगा
+        # Example: company.password_reset_otp = otp
+        #          company.otp_expiry = timezone.now() + timedelta(minutes=10)
+        #          company.save()
+        
+        # ✅ OTP को TERMINAL पर PRINT करें
+        print("\n" + "🔑"*20)
+        print(f"🔑 FORGOT PASSWORD OTP")
+        print(f"📧 EMAIL: {email}")
+        print(f"🏢 COMPANY: {company.company_name if company else 'Employee Account'}")
+        print(f"🔢 OTP: {otp}")
+        print("🔑"*20 + "\n")
+        
+        # Create reset token
+        from django.utils import timezone
+        token = PasswordResetToken.objects.create(
+            company=company,
+            email=email,
+            expires_at=timezone.now() + timedelta(hours=24)
+        )
+        
+        # Generate reset link (for testing)
+        reset_link = f"http://localhost:5173/reset-password/{token.token}/"
+        
+        return Response({
+            'success': True,
+            'message': 'Password reset link sent to email',
+            'debug_link': reset_link,  # Remove in production
+            'otp': otp  # ✅ Testing के लिए OTP भेजें
+        })
+    
+class ResetPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+    
+    def post(self, request):
+        token = request.data.get('token')
+        new_password = request.data.get('new_password')
+        
+        if not all([token, new_password]):
+            return Response({
+                'success': False,
+                'error': 'Token and new password required'
+            }, status=400)
+        
+        try:
+            reset_token = PasswordResetToken.objects.get(token=token)
+            
+            if reset_token.used or not reset_token.is_valid():
+                return Response({
+                    'success': False,
+                    'error': 'Invalid or expired token'
+                }, status=400)
+            
+            email = reset_token.email
+            user_type = reset_token.user_type
+            
+            print(f"\n🔑 RESET PASSWORD REQUEST")
+            print(f"📧 Email: {email}")
+            print(f"👤 User type: {user_type}")
+            print(f"🏢 Company: {reset_token.company}")
+            
+            if user_type == "company":
+                # Company password reset
+                user = Company.objects.filter(email=email).first()
+                if user:
+                    user.set_password(new_password)
+                    user.save()
+                    print(f"✅ Company password reset: {user.company_name}")
+                else:
+                    return Response({
+                        'success': False,
+                        'error': 'Company not found'
+                    }, status=404)
+                    
+            elif user_type == "employee":
+                # ✅ IMPORTANT: Employee password reset
+                employee = Employee.objects.filter(email=email, is_active=True).first()
+                if employee:
+                    # Check if employee belongs to the correct company
+                    if employee.company != reset_token.company:
+                        print(f"⚠️ Warning: Employee {email} doesn't belong to company {reset_token.company}")
+                        # Still allow reset, but log warning
+                    
+                    employee.set_password(new_password)
+                    employee.save()
+                    print(f"✅ Employee password reset: {employee.full_name}")
+                else:
+                    return Response({
+                        'success': False,
+                        'error': 'Employee not found'
+                    }, status=404)
+                    
+            else:
+                return Response({
+                    'success': False,
+                    'error': 'Invalid user type'
+                }, status=400)
+            
+            # Mark token as used
+            reset_token.used = True
+            reset_token.save()
+            
+            return Response({
+                'success': True,
+                'message': 'Password reset successful'
+            })
+            
+        except PasswordResetToken.DoesNotExist:
+            return Response({
+                'success': False,
+                'error': 'Invalid token'
+            }, status=400)
+        except Exception as e:
+            print(f"❌ Reset password error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=500)      
+
+
+# views.py में नया view add करें (अन्य views के साथ)
+from .serializers import OTPSerializer  # या नया serializer बनाएं
+
+class VerifyForgotPasswordOTPView(APIView):
+    permission_classes = [permissions.AllowAny]
+    
+    def post(self, request):
+        print("="*50)
+        print("VERIFY FORGOT PASSWORD OTP REQUEST")
+        print("Data:", request.data)
+        print("="*50)
+        
+        email = request.data.get('email_or_mobile')
+        otp = request.data.get('otp')
+        
+        if not email or not otp:
+            return Response({
+                'success': False,
+                'error': 'Email and OTP are required'
+            }, status=400)
+        
+        # ✅ TERMINAL पर PRINT करें (testing के लिए)
+        print("\n" + "🔑"*20)
+        print(f"🔑 VERIFY FORGOT PASSWORD OTP")
+        print(f"📧 EMAIL: {email}")
+        print(f"🔢 ENTERED OTP: {otp}")
+        print("🔑"*20 + "\n")
+        
+        # ✅ यहाँ Employee के लिए logic add करें
+        # पहले Company में check करें
+        company = Company.objects.filter(email=email).first()
+        user_type = "company"
+        
+        # यदि Company में नहीं मिला, तो Employee में check करें
+        if not company:
+            employee = Employee.objects.filter(email=email, is_active=True).first()
+            if employee:
+                company = employee.company
+                user_type = "employee"
+                print(f"✅ Found employee: {employee.full_name}, Company: {company.company_name}")
+            else:
+                return Response({
+                    'success': False,
+                    'error': 'No account found with this email'
+                }, status=404)
+        
+        # ✅ Employee के लिए company_id कभी None नहीं होना चाहिए
+        if not company:
+            return Response({
+                'success': False,
+                'error': 'Associated company not found'
+            }, status=404)
+        
+        print(f"✅ User type: {user_type}, Company: {company.company_name}")
+        
+        # OTP validation logic (आपके हिसाब से adjust करें)
+        # For testing, accept any 6-digit OTP
+        if len(otp) != 6 or not otp.isdigit():
+            return Response({
+                'success': False,
+                'error': 'Invalid OTP format. Must be 6 digits.'
+            }, status=400)
+        
+        # ✅ FIX: Employee के लिए company field never None होना चाहिए
+        try:
+            # Generate reset token
+            token = PasswordResetToken.objects.create(
+                company=company,  # ✅ ये company object होना चाहिए
+                email=email,
+                user_type=user_type,  # ✅ Add user_type field
+                expires_at=timezone.now() + timedelta(hours=24)
+            )
+            
+            print(f"✅ Reset token created: {token.token}")
+            
+        except Exception as e:
+            print(f"❌ Error creating reset token: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            return Response({
+                'success': False,
+                'error': f'Failed to create reset token: {str(e)}'
+            }, status=500)
+        
+        return Response({
+            'success': True,
+            'message': 'OTP verified successfully',
+            'reset_token': token.token,
+            'email_or_mobile': email,
+            'user_type': user_type
+        })
+    
+
+class ResendForgotPasswordOTPView(APIView):
+    permission_classes = [permissions.AllowAny]
+    
+    def post(self, request):
+        email = request.data.get('email_or_mobile')
+        
+        if not email:
+            return Response({
+                'success': False,
+                'error': 'Email is required'
+            }, status=400)
+        
+        # Generate new OTP
+        otp = str(random.randint(100000, 999999))
+        
+        # ✅ TERMINAL पर PRINT करें
+        print("\n" + "🔄"*20)
+        print(f"🔄 RESEND FORGOT PASSWORD OTP")
+        print(f"📧 EMAIL/MOBILE: {email}")
+        print(f"🔢 NEW OTP: {otp}")
+        print("🔄"*20 + "\n")
+        
+        return Response({
+            'success': True,
+            'message': 'OTP resent successfully',
+            'email_or_mobile': email,
+            'otp': otp  # Testing के लिए
+        })  
+
+
+## create modules
+
+
+
+from rest_framework import viewsets, filters, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
+from .models import Item, Customer, Vendor, Employee, Vehicle
+from .serializers import (
+    ItemSerializer, CustomerSerializer, 
+    VendorSerializer, EmployeeSerializer, VehicleSerializer
+)
+from .filters import ItemFilter, CustomerFilter, VendorFilter, EmployeeFilter, VehicleFilter
+
+class ItemViewSet(viewsets.ModelViewSet):
+    queryset = Item.objects.all()
+    serializer_class = ItemSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = ItemFilter
+    search_fields = ['item_code', 'item_name', 'item_description', 'hsn_code']
+    ordering_fields = ['item_code', 'item_name', 'created_at', 'updated_at']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        return Item.objects.filter(company=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(company=self.request.user, created_by=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def item_types(self, request):
+        return Response(Item.ITEM_TYPES)
+
+
+
+# Customer ViewSet - SABSE IMPORTANT
+class CustomerViewSet(viewsets.ModelViewSet):
+    queryset = Customer.objects.all()
+    serializer_class = CustomerSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = CustomerFilter
+    search_fields = ['customer_code', 'customer_name', 'gst_number', 'po_number', 'emails']
+    ordering_fields = ['customer_code', 'customer_name', 'created_at', 'updated_at']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        # IMPORTANT: self.request.user Company object है
+        # क्योंकि आपका AUTH_USER_MODEL = Company है
+        user_company = self.request.user
+        
+        # CustomerContact के लिए prefetch_related करें
+        return Customer.objects.filter(company=user_company).prefetch_related('customer_contact')
+
+    def perform_create(self, serializer):
+        # self.request.user Company object है
+        serializer.save(company=self.request.user, created_by=self.request.user)
+
+
+# Vendor ViewSet - SABSE IMPORTANT
+class VendorViewSet(viewsets.ModelViewSet):
+    queryset = Vendor.objects.all()
+    serializer_class = VendorSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = VendorFilter
+    search_fields = ['vendor_code', 'vendor_name', 'gst_number', 'emails', 'account_number', 'ifsc_code']
+    ordering_fields = ['vendor_code', 'vendor_name', 'created_at', 'updated_at']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        # IMPORTANT: self.request.user Company object है
+        user_company = self.request.user
+        
+        # VendorContact के लिए prefetch_related करें
+        return Vendor.objects.filter(company=user_company).prefetch_related('vendor_contact')
+
+    def perform_create(self, serializer):
+        # self.request.user Company object है
+        serializer.save(company=self.request.user, created_by=self.request.user)
+# IMPORTANT: delete/remove this old EmployeeViewSet completely (it's broken and not needed for Create screen)
+
+
+class VehicleViewSet(viewsets.ModelViewSet):
+    queryset = Vehicle.objects.all()
+    serializer_class = VehicleSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = VehicleFilter
+    search_fields = ['vehicle_code', 'vehicle_name', 'vehicle_number']
+    ordering_fields = ['vehicle_code', 'vehicle_name', 'created_at', 'updated_at']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        return Vehicle.objects.filter(company=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(company=self.request.user, created_by=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def expired_documents(self, request):
+        from django.utils import timezone
+        today = timezone.now().date()
+
+        qs = self.get_queryset()
+        expired_insurance = qs.filter(vehicle_insurance_expiry__lt=today, is_active=True)
+        expired_pollution = qs.filter(pollution_cert_expiry__lt=today, is_active=True)
+
+        return Response({
+            'expired_insurance': VehicleSerializer(expired_insurance, many=True).data,
+            'expired_pollution': VehicleSerializer(expired_pollution, many=True).data
+        })
+
+# views.py
+from rest_framework import viewsets
+from rest_framework.permissions import IsAuthenticated
+from .models import CreateEmployee
+from .serializers import CreateEmployeeSerializer
+from .permissions import IsSameCompany
+
+class CreateEmployeeViewSet(viewsets.ModelViewSet):
+    serializer_class = CreateEmployeeSerializer
+    permission_classes = [IsAuthenticated, IsSameCompany]
+
+    def get_queryset(self):
+        # Because request.user IS Company (AUTH_USER_MODEL = Company)
+        return CreateEmployee.objects.filter(company=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(
+            company=self.request.user,
+            created_by=self.request.user
+        )
+    
+    def get_serializer_context(self):
+        """
+        Pass request context to serializer
+        """
+        context = super().get_serializer_context()
+        context.update({
+            'request': self.request
+        })
+        return context
+
 
 # ===================== URL CONFIGURATION =====================
 

@@ -148,17 +148,20 @@ class Company(AbstractBaseUser, PermissionsMixin):
             address_parts.append(self.address_line2)
         address_parts.extend([self.city, self.state, self.pincode, self.country])
         return ', '.join(filter(None, address_parts))
+    
+    
+
 
 class Employee(models.Model):
-    ROLE_CHOICES = [
-        ('admin', 'Administrator'),
-        ('manager', 'Manager'),
-        ('supervisor', 'Supervisor'),
-        ('staff', 'Staff'),
-        ('viewer', 'Viewer'),
-        ('accountant', 'Accountant'),
-        ('hr', 'HR Manager'),
-    ]
+    # ROLE_CHOICES = [
+    #     ('admin', 'Administrator'),
+    #     ('manager', 'Manager'),
+    #     ('supervisor', 'Supervisor'),
+    #     ('staff', 'Staff'),
+    #     ('viewer', 'Viewer'),
+    #     ('accountant', 'Accountant'),
+    #     ('hr', 'HR Manager'),
+    # ]
     
     STATUS_CHOICES = [
         ('active', 'Active'),
@@ -196,24 +199,24 @@ class Employee(models.Model):
     )
     
     # Job Details
-    role = models.CharField(
-        max_length=50, 
-        choices=ROLE_CHOICES, 
-        verbose_name="Role",
-        default='staff'
-    )
-    department = models.CharField(max_length=100, blank=True, null=True, verbose_name="Department")
-    designation = models.CharField(max_length=100, blank=True, null=True, verbose_name="Designation")
-    joining_date = models.DateField(verbose_name="Joining Date")
+    # role = models.CharField(
+    #     max_length=50, 
+    #     choices=ROLE_CHOICES, 
+    #     verbose_name="Role",
+    #     default='staff'
+    # )
+    # department = models.CharField(max_length=100, blank=True, null=True, verbose_name="Department")
+    # designation = models.CharField(max_length=100, blank=True, null=True, verbose_name="Designation")
+    # joining_date = models.DateField(verbose_name="Joining Date")
     
     # Employment Details
-    salary = models.DecimalField(
-        max_digits=10, 
-        decimal_places=2, 
-        blank=True, 
-        null=True, 
-        verbose_name="Salary"
-    )
+    # salary = models.DecimalField(
+    #     max_digits=10, 
+    #     decimal_places=2, 
+    #     blank=True, 
+    #     null=True, 
+    #     verbose_name="Salary"
+    # )
     employment_type = models.CharField(
         max_length=50,
         choices=[
@@ -271,8 +274,8 @@ class Employee(models.Model):
             models.Index(fields=['employee_code']),
             models.Index(fields=['email']),
             models.Index(fields=['company', 'status']),
-            models.Index(fields=['company', 'role']),
-            models.Index(fields=['joining_date']),
+            # models.Index(fields=['company', 'role']),
+            # models.Index(fields=['joining_date']),
         ]
     
    
@@ -404,6 +407,9 @@ class EmployeeLoginHistory(models.Model):
 #warehouse models 
 
 
+#warehouse models 
+
+
 class Warehouse(models.Model):
     warehouse_id = models.AutoField(primary_key=True)
 
@@ -424,3 +430,418 @@ class Warehouse(models.Model):
     def __str__(self):
         return self.warehouse_name
 
+# models.py में EmployeeLoginHistory class के बाद ADD करें
+
+class PasswordResetToken(models.Model):
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='password_reset_tokens',
+        verbose_name="Company",
+        null=True,
+        blank=True
+    )
+    token = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    email = models.EmailField(verbose_name="Email Address")
+    
+    # ✅ User type field add करें
+    user_type = models.CharField(
+        max_length=20,
+        choices=[('company', 'Company'), ('employee', 'Employee')],
+        default='company',
+        verbose_name="User Type"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(default=timezone.now)
+    used = models.BooleanField(default=False)
+    
+    class Meta:
+        verbose_name = "Password Reset Token"
+        verbose_name_plural = "Password Reset Tokens"
+        db_table = 'password_reset_tokens'
+        indexes = [
+            models.Index(fields=['token']),
+            models.Index(fields=['email']),
+            models.Index(fields=['user_type']),
+            models.Index(fields=['expires_at']),
+        ]
+    
+    def __str__(self):
+        return f"Reset token for {self.email} ({self.user_type})"
+    
+    def is_valid(self):
+        from django.utils import timezone
+        return not self.used and self.expires_at > timezone.now()
+    
+
+
+## create modules
+
+
+
+from django.db import models
+from django.contrib.auth import get_user_model
+from .models import Company
+
+User = get_user_model()
+from django.core.validators import MinValueValidator, MaxValueValidator
+
+class Item(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='items', null=True, blank=True)
+    ITEM_TYPES = [
+        ('fuel', 'Fuel'),
+        ('pipeline', 'Pipeline'),
+        ('others', 'Others'),
+    ]
+    
+    item_code = models.CharField(max_length=50, unique=True)
+    item_name = models.CharField(max_length=200)
+    item_description = models.TextField(blank=True, null=True)
+    item_type = models.CharField(max_length=20, choices=ITEM_TYPES, default='others')
+    hsn_code = models.CharField(max_length=50, blank=True, null=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='items_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Item'
+        verbose_name_plural = 'Items'
+    
+    def __str__(self):
+        return f"{self.item_code} - {self.item_name}"
+    
+    def save(self, *args, **kwargs):
+        if not self.item_code:
+            prefix = "ITEM"
+            company_part = str(self.company.company_id) if self.company else "0"
+
+            if self.company:
+                last_item = Item.objects.filter(company=self.company).order_by('-id').first()
+            else:
+                last_item = Item.objects.order_by('-id').first()
+
+            new_num = 1
+            if last_item and last_item.item_code:
+                parts = last_item.item_code.split('-')
+                try:
+                    last_num = int(parts[-1])
+                    new_num = last_num + 1
+                except Exception:
+                    new_num = 1
+
+            self.item_code = f"{prefix}-{company_part}-{new_num:05d}"
+
+        super().save(*args, **kwargs)
+
+    
+
+
+class Customer(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='customers', null=True, blank=True)
+    customer_code = models.CharField(max_length=50, unique=True)
+    customer_name = models.CharField(max_length=200)
+    
+    gst_number = models.CharField(max_length=15, blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    po_number = models.CharField(max_length=100, blank=True, null=True)
+    credit_days = models.IntegerField(default=30, validators=[MinValueValidator(0), MaxValueValidator(365)])
+    emails = models.TextField(blank=True, null=True, help_text="Separate multiple emails with ;")
+    contact_persons = models.TextField(blank=True, null=True, help_text="Separate multiple person with ;")
+    contact_numbers = models.TextField(blank=True, null=True, help_text="Separate multiple numbers with ;")
+    send_price_email = models.BooleanField(default=False)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='customers_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+
+
+    
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Customer'
+        verbose_name_plural = 'Customers'
+    
+    def __str__(self):
+        return f"{self.customer_code} - {self.customer_name}"
+    
+    def save(self, *args, **kwargs):
+        if not self.customer_code:
+            prefix = "CUST"
+            company_part = str(self.company.company_id) if self.company else "0"
+
+            if self.company:
+                last_customer = Customer.objects.filter(company=self.company).order_by('-id').first()
+            else:
+                last_customer = Customer.objects.order_by('-id').first()
+
+            new_num = 1
+            if last_customer and last_customer.customer_code:
+                parts = last_customer.customer_code.split('-')
+                try:
+                    last_num = int(parts[-1])
+                    new_num = last_num + 1
+                except Exception:
+                    new_num = 1
+
+            self.customer_code = f"{prefix}-{company_part}-{new_num:05d}"
+
+        super().save(*args, **kwargs)
+    
+    def get_emails_list(self):
+        if self.emails:
+            return [email.strip() for email in self.emails.split(';') if email.strip()]
+        return []
+
+
+class CustomerContact(models.Model):
+    
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='customer_contact')
+    contact_name = models.CharField(max_length=100)
+    phone_number = models.CharField(max_length=15)
+    email = models.EmailField(blank=True, null=True)
+    designation = models.CharField(max_length=100, blank=True, null=True)
+    is_primary = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-is_primary', 'contact_name']
+        verbose_name = 'Customer Contact'
+        verbose_name_plural = 'Customer Contacts'
+    
+    def __str__(self):
+        return f"{self.contact_name} - {self.customer.customer_name}"
+
+    # def save(self, *args, **kwargs):
+    #     if not self.customer_code:
+    #         prefix = "CUST"
+    #         if self.company:
+    #             company_prefix = self.company.company_name[:3].upper()
+    #             last_customer = Customer.objects.filter(company=self.company).order_by('-id').first()
+    #         else:
+    #             last_customer = Customer.objects.order_by('-id').first()    
+
+
+class Vendor(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='vendors', null=True, blank=True)
+    vendor_code = models.CharField(max_length=50, unique=True)
+    
+    vendor_name = models.CharField(max_length=200)
+    gst_number = models.CharField(max_length=15, blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    emails = models.TextField(blank=True, null=True, help_text="Separate multiple emails with ;")
+
+    contact_persons=models.TextField(blank=True, null=True, help_text="Separate multiple person with ;")
+    contact_numbers=models.TextField(blank=True, null=True, help_text="Separate multiple numbers with ;")
+    account_number = models.CharField(max_length=50, blank=True, null=True)
+    bank_name = models.CharField(max_length=100, blank=True, null=True)
+    bank_branch = models.CharField(max_length=100, blank=True, null=True)
+    ifsc_code = models.CharField(max_length=20, blank=True, null=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='vendors_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Vendor'
+        verbose_name_plural = 'Vendors'
+    
+    def __str__(self):
+        return f"{self.vendor_code} - {self.vendor_name}"
+    
+    def save(self, *args, **kwargs):
+        if not self.vendor_code:
+            prefix = "VEND"
+            company_part = str(self.company.company_id) if self.company else "0"
+
+            if self.company:
+                last_vendor = Vendor.objects.filter(company=self.company).order_by('-id').first()
+            else:
+                last_vendor = Vendor.objects.order_by('-id').first()
+
+            new_num = 1
+            if last_vendor and last_vendor.vendor_code:
+                parts = last_vendor.vendor_code.split('-')
+                try:
+                    last_num = int(parts[-1])
+                    new_num = last_num + 1
+                except Exception:
+                    new_num = 1
+
+            self.vendor_code = f"{prefix}-{company_part}-{new_num:05d}"
+
+        super().save(*args, **kwargs)
+
+
+class VendorContact(models.Model):
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='vendor_contact')
+    contact_name = models.CharField(max_length=100)
+    phone_number = models.CharField(max_length=15)
+    email = models.EmailField(blank=True, null=True)
+    designation = models.CharField(max_length=100, blank=True, null=True)
+    is_primary = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-is_primary', 'contact_name']
+        verbose_name = 'Vendor Contact'
+        verbose_name_plural = 'Vendor Contacts'
+    
+    def __str__(self):
+        return f"{self.contact_name} - {self.vendor.vendor_name}"
+
+
+
+
+class Vehicle(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='vehicles', null=True, blank=True)
+    vehicle_code = models.CharField(max_length=50, unique=True)
+   
+    vehicle_name = models.CharField(max_length=200)
+    vehicle_number = models.CharField(max_length=50)
+    fc_expiry_date = models.DateField(blank=True, null=True)
+    transit_insurance_expiry = models.DateField(blank=True, null=True)
+    vehicle_insurance_expiry = models.DateField(blank=True, null=True)
+    road_tax_expiry = models.DateField(blank=True, null=True)
+    pollution_cert_expiry = models.DateField(blank=True, null=True)
+    tn_permit_expiry = models.DateField(blank=True, null=True)
+    ka_permit_expiry = models.DateField(blank=True, null=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='vehicles_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Vehicle'
+        verbose_name_plural = 'Vehicles'
+    
+    def __str__(self):
+        return f"{self.vehicle_code} - {self.vehicle_name} ({self.vehicle_number})"
+    
+    def save(self, *args, **kwargs):
+        if not self.vehicle_code:
+            prefix = "VEH"
+            company_part = str(self.company.company_id) if self.company else "0"
+
+            if self.company:
+                last_vehicle = Vehicle.objects.filter(company=self.company).order_by('-id').first()
+            else:
+                last_vehicle = Vehicle.objects.order_by('-id').first()
+
+            new_num = 1
+            if last_vehicle and last_vehicle.vehicle_code:
+                parts = last_vehicle.vehicle_code.split('-')
+                try:
+                    last_num = int(parts[-1])
+                    new_num = last_num + 1
+                except Exception:
+                    new_num = 1
+
+            self.vehicle_code = f"{prefix}-{company_part}-{new_num:05d}"
+
+        super().save(*args, **kwargs)
+
+
+from django.db import models
+from django.contrib.auth import get_user_model
+from django.core.validators import MinValueValidator
+from decimal import Decimal
+
+
+User = get_user_model()
+
+class CreateEmployee(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='create_employees', null=True, blank=True)
+    DESIGNATION_CHOICES = [
+        ('manager', 'Manager'),
+        ('transporter', 'Transporter'),
+        ('asst_manager', 'Assistant Manager'),
+        ('driver', 'Driver'),
+        ('md', 'MD'),
+        ('other', 'Other'),
+    ]
+    
+    employee_code = models.CharField(max_length=50, unique=True)
+    employee_name = models.CharField(max_length=200)
+    designation = models.CharField(max_length=20, choices=DESIGNATION_CHOICES, default='manager')
+    salary = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    account_number = models.CharField(max_length=50, blank=True, null=True)
+    bank_name = models.CharField(max_length=100, blank=True, null=True)
+    bank_branch = models.CharField(max_length=100, blank=True, null=True)
+    ifsc_code = models.CharField(max_length=20, blank=True, null=True)
+    transport_amount = models.DecimalField(
+    max_digits=10,
+    decimal_places=2,
+    null=True,
+    blank=True,
+    validators=[MinValueValidator(Decimal('0.00'))]
+)
+
+    dl_number = models.CharField(max_length=50, blank=True, null=True)
+    dl_expiry_date = models.DateField(null=True, blank=True)
+    hazardous_cert_number = models.CharField(max_length=100, blank=True, null=True)
+    hazardous_license_expiry = models.DateField(null=True, blank=True)
+    
+    # Audit fields
+    created_by = models.ForeignKey(
+        User, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        related_name='employees_created'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Create Employee'
+        verbose_name_plural = 'Create Employees'
+    
+    def __str__(self):
+        return f"{self.employee_code} - {self.employee_name}"
+    
+    def save(self, *args, **kwargs):
+        if not self.employee_code:
+            prefix = "EMP"
+        
+        # Get the company
+            company = self.company
+        
+        # Build query to find the highest existing number
+            if company:
+            # Get employees for this specific company
+                company_emps = CreateEmployee.objects.filter(company=company)
+            else:
+            # Get all employees without company
+                company_emps = CreateEmployee.objects.filter(company__isnull=True)
+        
+        # Find the highest number
+            max_num = 0
+            for emp in company_emps:
+                if emp.employee_code and emp.employee_code.startswith(prefix):
+                    try:
+                        # Extract number from "EMP-00001"
+                        parts = emp.employee_code.split('-')
+                        if len(parts) > 1:
+                            num_str = parts[-1]
+                            if num_str.isdigit():
+                                num = int(num_str)
+                                max_num = max(max_num, num)
+                    except:
+                        continue
+        
+        # Generate new number
+            new_num = max_num + 1
+            self.employee_code = f"{prefix}-{new_num:05d}"
+    
+    # Only set transport_amount for drivers
+        if self.designation != 'driver':
+            self.transport_amount = None
+        
+        super().save(*args, **kwargs)

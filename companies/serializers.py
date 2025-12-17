@@ -207,7 +207,6 @@ class CompanyProfileSerializer(serializers.ModelSerializer):
             'created_at'
         ]
         read_only_fields = ['company_id', 'email', 'is_verified', 'created_at']
-
 class EmployeeSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(source='company.company_name', read_only=True)
     
@@ -221,10 +220,10 @@ class EmployeeSerializer(serializers.ModelSerializer):
             'full_name',
             'email',
             'mobile',
-            'role',
-            'department',
-            'designation',
-            'joining_date',
+            # 'role',
+            # 'department',
+            # 'designation',
+            # 'joining_date',
             # 'salary',
             'employment_type',
             'status',
@@ -267,10 +266,10 @@ class AddEmployeeSerializer(serializers.ModelSerializer):
             'full_name',
             'email',
             'mobile',
-            'role',
-            'department',
-            'designation',
-            'joining_date',
+            # 'role',
+            # 'department',
+            # 'designation',
+            # 'joining_date',
             # 'salary',
             'employment_type',
             'address',
@@ -325,8 +324,7 @@ class OTPSerializer(serializers.Serializer):
     mobile = serializers.CharField(required=True)
     otp = serializers.CharField(required=True, min_length=6, max_length=6)
 
-
-
+    
 from rest_framework import serializers
 from .models import Warehouse, Company
 
@@ -467,11 +465,19 @@ class EmployeeLoginSerializer(serializers.Serializer):
                 company_id=company_id
             ).first()
             
+            # If employee not found in this company, check if email exists in other companies
             if not employee:
-                print(f"DEBUG: Employee not found - Email: {email}, Company ID: {company_id}")
-                raise serializers.ValidationError({
-                    'email': 'Employee not found.'
-                })
+                employee_in_other_company = Employee.objects.filter(email=email).first()
+                if employee_in_other_company:
+                    print(f"DEBUG: Employee email exists but in different company")
+                    raise serializers.ValidationError({
+                        'email': 'This email belongs to a different company. Please check your company ID.'
+                    })
+                else:
+                    print(f"DEBUG: Employee not found - Email: {email}, Company ID: {company_id}")
+                    raise serializers.ValidationError({
+                        'email': 'Employee not found.'
+                    })
             
             # Check if active
             if not employee.is_active or employee.status != 'active':
@@ -501,7 +507,7 @@ class EmployeeLoginSerializer(serializers.Serializer):
             from rest_framework_simplejwt.tokens import RefreshToken
             refresh = RefreshToken.for_user(employee.company)
             refresh['employee_id'] = employee.employee_id
-            refresh['employee_role'] = employee.role
+            # refresh['employee_role'] = employee.role
             refresh['employee_email'] = employee.email
             
             # ✅ Employee OBJECT को validated_data में add करें
@@ -515,9 +521,9 @@ class EmployeeLoginSerializer(serializers.Serializer):
                 'code': employee.employee_code,
                 'full_name': employee.full_name,
                 'email': employee.email,
-                'role': employee.role,
-                'department': employee.department,
-                'designation': employee.designation,
+                # 'role': employee.role,
+                # 'department': employee.department,
+                # 'designation': employee.designation,
                 'temp_password': employee.temp_password
             }
             data['company_data'] = {
@@ -569,12 +575,12 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
             'full_name',
             'email',
             'mobile',
-            'role',
-            'department',
-            'designation',
+            # 'role',
+            # 'department',
+            # 'designation',
             'company_name',
             'company_email',
-            'joining_date',
+            # 'joining_date',
             'employment_type',
             'status',
             'is_active',
@@ -593,3 +599,274 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
             'last_login',
             'created_at'
         ]        
+
+
+
+# Forgot password serializers
+class ForgotPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+
+class ResetPasswordSerializer(serializers.Serializer):
+    token = serializers.UUIDField(required=True)
+    new_password = serializers.CharField(required=True, min_length=8)
+    confirm_password = serializers.CharField(required=True)
+    
+    def validate(self, data):
+        if data['new_password'] != data['confirm_password']:
+            raise serializers.ValidationError("Passwords do not match")
+        return data
+
+
+
+
+## create modules
+
+
+
+from rest_framework import serializers
+from .models import (
+    Item, Customer, CustomerContact, 
+    Vendor, VendorContact, Employee, Vehicle
+)
+
+class ItemSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source='company.company_name', read_only=True)
+    
+    class Meta:
+        model = Item
+        fields = [
+            'id', 'item_code', 'item_name', 'item_description', 
+            'item_type', 'hsn_code', 'company', 'company_name',
+            'created_by', 'created_at', 'updated_at', 'is_active'
+        ]
+        read_only_fields = ['item_code', 'company', 'created_by', 'created_at', 'updated_at']
+    
+    def create(self, validated_data):
+        validated_data['company'] = self.context['request'].user
+        validated_data['created_by'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+
+class CustomerContactSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomerContact
+        fields = [
+            'id', 'contact_name', 'phone_number', 'email',
+            'designation', 'is_primary', 'created_at'
+        ]
+
+class CustomerSerializer(serializers.ModelSerializer):
+    # CustomerContact से related data
+    customer_contacts = CustomerContactSerializer(many=True, read_only=True, source='customer_contact')
+    
+    # TextField से list बनाने के लिए method fields
+    emails_list = serializers.SerializerMethodField()
+    contact_persons_list = serializers.SerializerMethodField()
+    contact_numbers_list = serializers.SerializerMethodField()
+    
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    company_name = serializers.CharField(source='company.company_name', read_only=True, allow_null=True)
+    
+    class Meta:
+        model = Customer
+        fields = [
+            'id', 'company', 'company_name', 'customer_code', 'customer_name', 'gst_number',
+            'address', 'po_number', 'credit_days', 'emails', 'emails_list',
+            'contact_persons', 'contact_numbers', 'contact_persons_list', 'contact_numbers_list',
+            'send_price_email', 'customer_contacts', 'created_by', 'created_by_name',
+            'created_at', 'updated_at', 'is_active'
+        ]
+        read_only_fields = ['customer_code', 'created_by', 'created_at', 'updated_at']
+    
+    def get_emails_list(self, obj):
+        return obj.get_emails_list()
+    
+    def get_contact_persons_list(self, obj):
+        if obj.contact_persons:
+            return [person.strip() for person in obj.contact_persons.split(';') if person.strip()]
+        return []
+    
+    def get_contact_numbers_list(self, obj):
+        if obj.contact_numbers:
+            return [num.strip() for num in obj.contact_numbers.split(';') if num.strip()]
+        return []
+    
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['created_by'] = request.user
+        return Customer.objects.create(**validated_data)
+    
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+class VendorContactSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VendorContact
+        fields = [
+            'id', 'contact_name', 'phone_number', 'email',
+            'designation', 'is_primary', 'created_at'
+        ]
+
+class VendorSerializer(serializers.ModelSerializer):
+    # VendorContact से related data - यह optional है
+    vendor_contacts = VendorContactSerializer(many=True, read_only=True, source='vendor_contact')
+    
+    # TextField से list बनाने के लिए method fields
+    emails_list = serializers.SerializerMethodField()
+    contact_persons_list = serializers.SerializerMethodField()
+    contact_numbers_list = serializers.SerializerMethodField()
+    
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    company_name = serializers.CharField(source='company.company_name', read_only=True, allow_null=True)
+    
+    class Meta:
+        model = Vendor
+        fields = [
+            'id', 'company', 'company_name', 'vendor_code', 'vendor_name', 'gst_number',
+            'address', 'emails', 'emails_list', 'contact_persons', 'contact_numbers',
+            'contact_persons_list', 'contact_numbers_list', 'vendor_contacts',
+            'account_number', 'bank_name', 'bank_branch', 'ifsc_code',
+            'created_by', 'created_by_name', 'created_at', 'updated_at', 'is_active'
+        ]
+        read_only_fields = ['vendor_code', 'created_by', 'created_at', 'updated_at']
+    
+    def get_emails_list(self, obj):
+        if obj.emails:
+            return [email.strip() for email in obj.emails.split(';') if email.strip()]
+        return []
+    
+    def get_contact_persons_list(self, obj):
+        if obj.contact_persons:
+            return [person.strip() for person in obj.contact_persons.split(';') if person.strip()]
+        return []
+    
+    def get_contact_numbers_list(self, obj):
+        if obj.contact_numbers:
+            return [num.strip() for num in obj.contact_numbers.split(';') if num.strip()]
+        return []
+    
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['created_by'] = request.user
+        return Vendor.objects.create(**validated_data)
+    
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+
+
+class VehicleSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    is_insurance_expired = serializers.BooleanField(read_only=True)
+    is_pollution_cert_expired = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = Vehicle
+        fields = [
+            'id', 'vehicle_code', 'vehicle_name', 'vehicle_number',
+            'fc_expiry_date', 'transit_insurance_expiry', 'vehicle_insurance_expiry',
+            'road_tax_expiry', 'pollution_cert_expiry', 'tn_permit_expiry',
+            'ka_permit_expiry', 'is_insurance_expired', 'is_pollution_cert_expired',
+            'created_by', 'created_by_name', 'created_at', 'updated_at',
+            'is_active'
+        ]
+        read_only_fields = ['vehicle_code', 'created_by', 'created_at', 'updated_at']
+    
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['created_by'] = request.user
+        return super().create(validated_data)
+
+
+from rest_framework import serializers
+from .models import CreateEmployee
+
+# class CreateEmployeeSerializer(serializers.ModelSerializer):
+#     designation_display = serializers.CharField(source='get_designation_display', read_only=True)
+#     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+#     is_dl_expired = serializers.BooleanField(read_only=True)
+#     is_hazardous_license_expired = serializers.BooleanField(read_only=True)
+    
+#     class Meta:
+#         model = CreateEmployee
+#         fields = [
+#             'id', 'employee_code', 'employee_name', 'designation',
+#             'designation_display', 'salary', 'account_number', 'bank_name',
+#             'bank_branch', 'ifsc_code', 'transport_amount', 'dl_number',
+#             'dl_expiry_date', 'hazardous_cert_number', 'hazardous_license_expiry',
+#             'is_dl_expired', 'is_hazardous_license_expired',
+#             'created_by', 'created_by_name', 'created_at', 'updated_at',
+#             'is_active'
+#         ]
+#         read_only_fields = ['employee_code', 'created_by', 'created_at', 'updated_at']
+    
+#     def create(self, validated_data):
+#         request = self.context.get('request')
+#         if request and hasattr(request, 'user'):
+#             validated_data['created_by'] = request.user
+#         return super().create(validated_data)
+    
+#     def validate(self, data):
+#         # Clear transport_amount if designation is not driver
+#         if data.get('designation') != 'driver' and 'transport_amount' in data:
+#             data['transport_amount'] = None
+#         return data
+
+
+# serializers.py
+from rest_framework import serializers
+from .models import CreateEmployee
+
+class CreateEmployeeSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source='company.company_name', read_only=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    designation_display = serializers.CharField(source='get_designation_display', read_only=True)
+    is_dl_expired = serializers.BooleanField(read_only=True)
+    is_hazardous_license_expired = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = CreateEmployee
+        fields = [
+            'id', 'employee_code', 'employee_name', 'designation',
+            'designation_display', 'salary', 'account_number', 'bank_name',
+            'bank_branch', 'ifsc_code', 'transport_amount', 'dl_number',
+            'dl_expiry_date', 'hazardous_cert_number', 'hazardous_license_expiry',
+            'is_dl_expired', 'is_hazardous_license_expired',
+            'company', 'company_name', 'created_by', 'created_by_name',
+            'created_at', 'updated_at', 'is_active'
+        ]
+        read_only_fields = [
+            'employee_code', 'company', 'company_name', 
+            'created_by', 'created_by_name', 'created_at', 
+            'updated_at'
+        ]
+    
+    def create(self, validated_data):
+        validated_data['company'] = self.context['request'].user
+        validated_data['created_by'] = self.context['request'].user
+        return super().create(validated_data)
+    
+    def validate(self, data):
+        designation = data.get(
+            'designation',
+            self.instance.designation if self.instance else None
+        )
+
+    # Driver ke alawa sabke liye transport_amount null
+        if designation != 'driver':
+            data['transport_amount'] = None
+
+    # ❌ No DL / Hazardous validation
+        return data       
