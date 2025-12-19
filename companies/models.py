@@ -496,7 +496,7 @@ class Item(models.Model):
     ]
     
     item_code = models.CharField(max_length=50, unique=True)
-    item_name = models.CharField(max_length=200)
+    item_name = models.CharField(max_length=200, unique=True)
     item_description = models.TextField(blank=True, null=True)
     item_type = models.CharField(max_length=20, choices=ITEM_TYPES, default='others')
     hsn_code = models.CharField(max_length=50, blank=True, null=True)
@@ -542,7 +542,7 @@ class Item(models.Model):
 class Customer(models.Model):
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='customers', null=True, blank=True)
     customer_code = models.CharField(max_length=50, unique=True)
-    customer_name = models.CharField(max_length=200)
+    customer_name = models.CharField(max_length=200,unique=True )
     
     gst_number = models.CharField(max_length=15, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
@@ -629,7 +629,7 @@ class Vendor(models.Model):
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='vendors', null=True, blank=True)
     vendor_code = models.CharField(max_length=50, unique=True)
     
-    vendor_name = models.CharField(max_length=200)
+    vendor_name = models.CharField(max_length=200, unique=True)
     gst_number = models.CharField(max_length=15, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
     emails = models.TextField(blank=True, null=True, help_text="Separate multiple emails with ;")
@@ -702,14 +702,43 @@ class Vehicle(models.Model):
     vehicle_code = models.CharField(max_length=50, unique=True)
    
     vehicle_name = models.CharField(max_length=200)
-    vehicle_number = models.CharField(max_length=50)
+    vehicle_number = models.CharField(max_length=50, unique=True)
     fc_expiry_date = models.DateField(blank=True, null=True)
     transit_insurance_expiry = models.DateField(blank=True, null=True)
     vehicle_insurance_expiry = models.DateField(blank=True, null=True)
-    road_tax_expiry = models.DateField(blank=True, null=True)
+    # road_tax_expiry = models.DateField(blank=True, null=True)
+    road_tax = models.JSONField(
+    default=list,
+    blank=True,
+    help_text="State-wise road tax expiry dates in format: [{'state': 'MH', 'expiry_date': '2024-12-31'}, ...]"
+)
+    state_permits = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="State-wise permits in format: [{'state': 'MH', 'expiry_date': '2024-12-31'}, ...]"
+    )
     pollution_cert_expiry = models.DateField(blank=True, null=True)
     tn_permit_expiry = models.DateField(blank=True, null=True)
     ka_permit_expiry = models.DateField(blank=True, null=True)
+    # National permit
+    has_national_permit = models.BooleanField(default=False)
+    national_permit_expiry = models.DateField(blank=True, null=True)
+
+    # Notification / reminder settings (emails and SMS)
+    notification_emails = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Separate multiple emails with ;"
+    )
+    notification_phone_numbers = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Separate multiple numbers with ;"
+    )
+    enable_7day_reminder = models.BooleanField(default=True)
+    enable_3day_reminder = models.BooleanField(default=True)
+    enable_expiry_day_reminder = models.BooleanField(default=True)
+
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='vehicles_created')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -723,6 +752,28 @@ class Vehicle(models.Model):
     def __str__(self):
         return f"{self.vehicle_code} - {self.vehicle_name} ({self.vehicle_number})"
     
+    @property
+    def is_insurance_expired(self):
+        """
+        Helper property for serializers:
+        True when vehicle_insurance_expiry is in the past.
+        """
+        from django.utils import timezone
+        if self.vehicle_insurance_expiry:
+            return self.vehicle_insurance_expiry < timezone.now().date()
+        return False
+
+    @property
+    def is_pollution_cert_expired(self):
+        """
+        Helper property for serializers:
+        True when pollution_cert_expiry is in the past.
+        """
+        from django.utils import timezone
+        if self.pollution_cert_expiry:
+            return self.pollution_cert_expiry < timezone.now().date()
+        return False
+
     def save(self, *args, **kwargs):
         if not self.vehicle_code:
             prefix = "VEH"
@@ -752,11 +803,16 @@ from django.contrib.auth import get_user_model
 from django.core.validators import MinValueValidator
 from decimal import Decimal
 
-
 User = get_user_model()
 
 class CreateEmployee(models.Model):
-    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='create_employees', null=True, blank=True)
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='created_employees'   # ✅ UNIQUE
+    )
+
+
     DESIGNATION_CHOICES = [
         ('manager', 'Manager'),
         ('transporter', 'Transporter'),
@@ -765,83 +821,79 @@ class CreateEmployee(models.Model):
         ('md', 'MD'),
         ('other', 'Other'),
     ]
-    
-    employee_code = models.CharField(max_length=50, unique=True)
+
+    employee_code = models.CharField(max_length=50)
     employee_name = models.CharField(max_length=200)
-    designation = models.CharField(max_length=20, choices=DESIGNATION_CHOICES, default='manager')
+    designation = models.CharField(
+        max_length=20,
+        choices=DESIGNATION_CHOICES,
+        default='manager'
+    )
+
     salary = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     account_number = models.CharField(max_length=50, blank=True, null=True)
     bank_name = models.CharField(max_length=100, blank=True, null=True)
     bank_branch = models.CharField(max_length=100, blank=True, null=True)
     ifsc_code = models.CharField(max_length=20, blank=True, null=True)
+
     transport_amount = models.DecimalField(
-    max_digits=10,
-    decimal_places=2,
-    null=True,
-    blank=True,
-    validators=[MinValueValidator(Decimal('0.00'))]
-)
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.00'))]
+    )
 
     dl_number = models.CharField(max_length=50, blank=True, null=True)
     dl_expiry_date = models.DateField(null=True, blank=True)
     hazardous_cert_number = models.CharField(max_length=100, blank=True, null=True)
     hazardous_license_expiry = models.DateField(null=True, blank=True)
-    
-    # Audit fields
+
     created_by = models.ForeignKey(
-        User, 
-        on_delete=models.SET_NULL, 
-        null=True, 
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name='employees_created'
     )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
-    
+
     class Meta:
         ordering = ['-created_at']
-        verbose_name = 'Create Employee'
-        verbose_name_plural = 'Create Employees'
-    
+        verbose_name = 'Employee'
+        verbose_name_plural = 'Employees'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['company', 'employee_code'],
+                name='unique_employee_code_per_company'
+            )
+        ]
+
     def __str__(self):
         return f"{self.employee_code} - {self.employee_name}"
-    
+
     def save(self, *args, **kwargs):
+        if not self.company:
+            raise ValueError("Company is required")
+
         if not self.employee_code:
             prefix = "EMP"
-        
-        # Get the company
-            company = self.company
-        
-        # Build query to find the highest existing number
-            if company:
-            # Get employees for this specific company
-                company_emps = CreateEmployee.objects.filter(company=company)
-            else:
-            # Get all employees without company
-                company_emps = CreateEmployee.objects.filter(company__isnull=True)
-        
-        # Find the highest number
+            company_emps = CreateEmployee.objects.filter(company=self.company)
+
             max_num = 0
             for emp in company_emps:
                 if emp.employee_code and emp.employee_code.startswith(prefix):
                     try:
-                        # Extract number from "EMP-00001"
-                        parts = emp.employee_code.split('-')
-                        if len(parts) > 1:
-                            num_str = parts[-1]
-                            if num_str.isdigit():
-                                num = int(num_str)
-                                max_num = max(max_num, num)
+                        num = int(emp.employee_code.split('-')[-1])
+                        max_num = max(max_num, num)
                     except:
-                        continue
-        
-        # Generate new number
-            new_num = max_num + 1
-            self.employee_code = f"{prefix}-{new_num:05d}"
-    
-    # Only set transport_amount for drivers
+                        pass
+
+            self.employee_code = f"{prefix}-{max_num + 1:05d}"
+
         if self.designation != 'driver':
             self.transport_amount = None
-        
+
         super().save(*args, **kwargs)
