@@ -678,7 +678,13 @@ class CustomerSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'is_active'
         ]
         read_only_fields = ['customer_code', 'created_by', 'created_at', 'updated_at']
-    
+    def validate_customer_name(self, value):
+        company = self.initial_data.get('company')
+        customer_id = self.instance.id if self.instance else None
+        if Customer.objects.filter(company_id=company, customer_name=value).exclude(id=customer_id).exists():
+            raise serializers.ValidationError("Customer name already exists for this company.")
+        return value
+
     def get_emails_list(self, obj):
         return obj.get_emails_list()
     
@@ -776,8 +782,12 @@ class VehicleSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'vehicle_code', 'vehicle_name', 'vehicle_number',
             'fc_expiry_date', 'transit_insurance_expiry', 'vehicle_insurance_expiry',
-            'road_tax_expiry', 'pollution_cert_expiry', 'tn_permit_expiry',
-            'ka_permit_expiry', 'is_insurance_expired', 'is_pollution_cert_expired',
+            'road_tax',  'state_permits' ,'pollution_cert_expiry',
+            'tn_permit_expiry', 'ka_permit_expiry',
+            'has_national_permit', 'national_permit_expiry',
+            'notification_emails', 'notification_phone_numbers',
+            'enable_7day_reminder', 'enable_3day_reminder', 'enable_expiry_day_reminder',
+            'is_insurance_expired', 'is_pollution_cert_expired',
             'created_by', 'created_by_name', 'created_at', 'updated_at',
             'is_active'
         ]
